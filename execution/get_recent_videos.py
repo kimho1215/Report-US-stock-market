@@ -22,12 +22,12 @@ def log(msg, debug=False):
 def get_service(debug=False):
     log("Initializing YouTube Service...", debug)
     creds = None
-    if os.path.exists('token.json'):
-        log("Found token.json, loading credentials...", debug)
+    if os.path.exists('token_youtube.json'):
+        log("Found token_youtube.json, loading credentials...", debug)
         try:
-            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+            creds = Credentials.from_authorized_user_file('token_youtube.json', SCOPES)
         except Exception as e:
-            log(f"Error loading token.json: {e}", debug)
+            log(f"Error loading token_youtube.json: {e}", debug)
             creds = None
     
     if not creds or not creds.valid:
@@ -41,8 +41,8 @@ def get_service(debug=False):
                 'credentials.json', SCOPES)
             creds = flow.run_local_server(port=0)
         
-        log("Saving new credentials to token.json...", debug)
-        with open('token.json', 'w') as token:
+        log("Saving new credentials to token_youtube.json...", debug)
+        with open('token_youtube.json', 'w') as token:
             token.write(creds.to_json())
 
     log("Building YouTube service object...", debug)
@@ -87,19 +87,34 @@ def main():
             items = response.get('items', [])
             log(f"Found {len(items)} items for '{query}'.", debug)
 
+            # Define keywords for inclusion and explicit blacklist for exclusion
+            allowed_keywords = ["삼프로", "언더스탠딩", "와이스트릿"]
+            blacklist_keywords = ["하나님 나라", "Hacks Hub", "Smart English"]
+
             for item in items:
                 video_id = item['id']['videoId']
-                if video_id not in seen_ids:
+                channel_title = item['snippet']['channelTitle']
+                
+                # Inclusion check: Must contain one of the allowed keywords
+                is_target = any(k in channel_title for k in allowed_keywords)
+                # Exclusion check: Must NOT contain any of the blacklist keywords
+                is_blacklisted = any(k in channel_title for k in blacklist_keywords)
+                
+                if video_id not in seen_ids and is_target and not is_blacklisted:
                     video_data = {
                         'id': video_id,
                         'title': item['snippet']['title'],
                         'publishedAt': item['snippet']['publishedAt'],
-                        'channelTitle': item['snippet']['channelTitle']
+                        'channelTitle': channel_title
                     }
                     videos.append(video_data)
                     seen_ids.add(video_id)
-                    log(f"Processed video: {video_data['title']} ({video_data['id']})", debug)
-                    print(f"Found: {video_data['title']} ({video_data['id']})")
+                    log(f"Processed video: {video_data['title']} from {channel_title} ({video_id})", debug)
+                    print(f"Found: {video_data['title']} ({video_id})")
+                elif is_blacklisted:
+                    log(f"Skipping blacklisted channel: {channel_title} - {item['snippet']['title']}", debug)
+                elif not is_target:
+                    log(f"Skipping unrelated channel: {channel_title} - {item['snippet']['title']}", debug)
         except Exception as e:
             print(f"Error during search for '{query}': {e}")
             continue

@@ -16,9 +16,9 @@ SCOPES = ['https://www.googleapis.com/auth/gmail.compose']
 
 def get_service():
     creds = None
-    if os.path.exists('token.json'):
+    if os.path.exists('token_email.json'):
         try:
-            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+            creds = Credentials.from_authorized_user_file('token_email.json', SCOPES)
         except:
             creds = None
     if not creds or not creds.valid:
@@ -27,7 +27,7 @@ def get_service():
         else:
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
             creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
+        with open('token_email.json', 'w') as token:
             token.write(creds.to_json())
     return build('gmail', 'v1', credentials=creds)
 
