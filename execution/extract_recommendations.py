@@ -2,10 +2,11 @@ import os
 import sys
 import json
 import argparse
-import google.generativeai as genai
 import time
 from youtube_transcript_api import YouTubeTranscriptApi
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 
 # Force UTF-8 encoding for stdout/stderr
 sys.stdout.reconfigure(encoding='utf-8')
@@ -17,26 +18,33 @@ def log(msg, debug=False):
     if debug:
         print(f"[DEBUG] {msg}")
 
-# Setup Gemini
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-1.5-flash')
+# Setup Gemini with new SDK
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 def get_transcript(video_id, debug=False):
     try:
         log(f"Fetching transcript for video ID: {video_id}", debug)
-        api = YouTubeTranscriptApi()
-        transcript_list = api.fetch(video_id, languages=['ko', 'en'])
-        text = " ".join([t.text for t in transcript_list])
-        log(f"Transcript fetched successfully ({len(text)} chars)", debug)
-        return text
+        try:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            try:
+                t = transcript_list.find_transcript(['ko', 'en'])
+            except:
+                t = next(iter(transcript_list))
+            data = t.fetch()
+            text = " ".join([i['text'] for i in data])
+            log(f"Transcript fetched successfully ({len(text)} chars)", debug)
+            return text
+        except Exception as e:
+            log(f"Transcript retrieval failed: {e}", debug)
+            return None
     except Exception as e:
-        log(f"Could not get transcript for {video_id}: {e}", debug)
+        log(f"Error in get_transcript: {e}", debug)
         return None
 
 def analyze_transcript(text, video_title, debug=False):
-    log(f"Analyzing transcript with Gemini for: {video_title}", debug)
+    log(f"Analyzing content with Gemini for: {video_title}", debug)
     prompt = f"""
-    Analyze the following YouTube video transcript titled "{video_title}".
+    Analyze the following YouTube video content titled "{video_title}".
     Identify any specific investment recommendations for US or Korean stocks.
     
     Structure your answer strictly as a JSON object with a key "recommendations" which is a list of objects. 
@@ -50,27 +58,36 @@ def analyze_transcript(text, video_title, debug=False):
     
     If there are no clear recommendations, return {{"recommendations": []}}.
     
-    Transcript:
-    {text[:30000]} 
+    Content:
+    {text[:40000]} 
     """ 
 
-    try:
-        log("Sending request to Gemini...", debug)
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                response_mime_type="application/json",
-            ),
-        )
-        log("Received response from Gemini.", debug)
-        
-        result_json = json.loads(response.text)
-        return result_json.get("recommendations", [])
-        
-    except Exception as e:
-        log(f"Error analyzing with Gemini: {e}", debug)
-        print(f"Error analyzing with Gemini: {e}")
-        return []
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            log(f"Sending request to Gemini (gemini-flash-latest) - Attempt {attempt+1}...", debug)
+            response = client.models.generate_content(
+                model='gemini-flash-latest',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
+            )
+            log("Received response from Gemini.", debug)
+            
+            result_json = json.loads(response.text)
+            return result_json.get("recommendations", [])
+            
+        except Exception as e:
+            if "429" in str(e):
+                wait_time = 20 * (attempt + 1)
+                log(f"Rate limited (429). Waiting {wait_time}s and retrying...", debug)
+                time.sleep(wait_time)
+            else:
+                log(f"Error analyzing with Gemini: {e}", debug)
+                print(f"Error analyzing with Gemini: {e}")
+                break
+    return []
 
 def main():
     parser = argparse.ArgumentParser(description='Extract recommendations from transcripts.')
@@ -91,22 +108,36 @@ def main():
     all_recommendations = []
     log(f"Found {len(videos)} videos to process.", debug)
 
-    for video in videos:
+    # Process only top 20 videos to be safe with quota
+    for video in videos[:20]:
         print(f"Processing {video['title']}...")
         transcript = get_transcript(video['id'], debug)
+        
+        analysis_input = ""
+        input_type = ""
+        
         if transcript:
-            recs = analyze_transcript(transcript, video['title'], debug)
-            if recs:
-                print(f"Found {len(recs)} recommendations.")
-                log(f"Recommendations: {recs}", debug)
-                for r in recs:
-                    r['video_title'] = video['title']
-                    r['video_id'] = video['id']
-                    all_recommendations.append(r)
-            else:
-                log("No recommendations found in this video.", debug)
+            analysis_input = f"Transcript: {transcript}"
+            input_type = "Transcript"
         else:
-            print("Skipping (no transcript).")
+            print("  - Transcript not available. Using Tags and Description.")
+            tags_str = ", ".join(video.get('tags', []))
+            analysis_input = f"Title: {video.get('title', '')}\nTags: {tags_str}\nDescription: {video.get('description', '')}"
+            input_type = "Tags/Description"
+
+        recs = analyze_transcript(analysis_input, video['title'], debug)
+        if recs:
+            print(f"  - Found {len(recs)} recommendations using {input_type}.")
+            for r in recs:
+                r['video_title'] = video['title']
+                r['video_id'] = video['id']
+                r['source_type'] = input_type
+                all_recommendations.append(r)
+        else:
+            print(f"  - No recommendations found in {input_type}.")
+        
+        # Consistent delay to avoid 429
+        time.sleep(15)
 
     # Output results
     log("Writing results to .tmp/analysis_results.json...", debug)

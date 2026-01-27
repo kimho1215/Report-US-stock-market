@@ -8,9 +8,13 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
+from dotenv import load_dotenv
+
 # Force UTF-8 encoding for stdout/stderr
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
+
+load_dotenv()
 
 SCOPES = ['https://www.googleapis.com/auth/gmail.compose']
 

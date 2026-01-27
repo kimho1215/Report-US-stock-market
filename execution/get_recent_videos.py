@@ -23,29 +23,20 @@ def get_service(debug=False):
     log("Initializing YouTube Service...", debug)
     creds = None
     if os.path.exists('token_youtube.json'):
-        log("Found token_youtube.json, loading credentials...", debug)
         try:
             creds = Credentials.from_authorized_user_file('token_youtube.json', SCOPES)
-        except Exception as e:
-            log(f"Error loading token_youtube.json: {e}", debug)
+        except Exception:
             creds = None
     
     if not creds or not creds.valid:
-        log("Credentials invalid or expired.", debug)
         if creds and creds.expired and creds.refresh_token:
-            log("Refleshing expired token...", debug)
             creds.refresh(Request())
         else:
-            log("Starting OAuth flow...", debug)
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
             creds = flow.run_local_server(port=0)
-        
-        log("Saving new credentials to token_youtube.json...", debug)
         with open('token_youtube.json', 'w') as token:
             token.write(creds.to_json())
 
-    log("Building YouTube service object...", debug)
     return build('youtube', 'v3', credentials=creds)
 
 def main():
@@ -54,80 +45,79 @@ def main():
     args = parser.parse_args()
     debug = args.debug
 
-    log("Script started.", debug)
     service = get_service(debug)
 
     now = datetime.datetime.now(datetime.timezone.utc)
-    one_day_ago = now - datetime.timedelta(hours=24)
-    published_after = one_day_ago.isoformat().replace("+00:00", "Z")
+    published_after = (now - datetime.timedelta(hours=36)).isoformat().replace("+00:00", "Z")
+    published_before = (now - datetime.timedelta(hours=12)).isoformat().replace("+00:00", "Z")
 
-    # List of channels/keywords to search for
     search_queries = ["삼프로TV", "언더스탠딩", "와이스트릿"]
     
-    videos = []
+    found_video_ids = []
     seen_ids = set()
 
     for query in search_queries:
-        log(f"Searching for '{query}' videos published after {published_after}...", debug)
         print(f"Searching for '{query}' videos...")
-
         try:
             request = service.search().list(
                 part="snippet",
                 q=query, 
                 type="video",
                 publishedAfter=published_after,
-                maxResults=20, # Reduced per query to balance quota
+                publishedBefore=published_before,
+                maxResults=10,
                 order="date"
             )
-            log(f"Executing search request for {query}...", debug)
             response = request.execute()
-            log(f"Search request for {query} completed.", debug)
             
-            items = response.get('items', [])
-            log(f"Found {len(items)} items for '{query}'.", debug)
-
-            # Define keywords for inclusion and explicit blacklist for exclusion
             allowed_keywords = ["삼프로", "언더스탠딩", "와이스트릿"]
             blacklist_keywords = ["하나님 나라", "Hacks Hub", "Smart English"]
 
-            for item in items:
+            for item in response.get('items', []):
                 video_id = item['id']['videoId']
                 channel_title = item['snippet']['channelTitle']
                 
-                # Inclusion check: Must contain one of the allowed keywords
                 is_target = any(k in channel_title for k in allowed_keywords)
-                # Exclusion check: Must NOT contain any of the blacklist keywords
                 is_blacklisted = any(k in channel_title for k in blacklist_keywords)
                 
                 if video_id not in seen_ids and is_target and not is_blacklisted:
-                    video_data = {
-                        'id': video_id,
-                        'title': item['snippet']['title'],
-                        'publishedAt': item['snippet']['publishedAt'],
-                        'channelTitle': channel_title
-                    }
-                    videos.append(video_data)
+                    found_video_ids.append(video_id)
                     seen_ids.add(video_id)
-                    log(f"Processed video: {video_data['title']} from {channel_title} ({video_id})", debug)
-                    print(f"Found: {video_data['title']} ({video_id})")
-                elif is_blacklisted:
-                    log(f"Skipping blacklisted channel: {channel_title} - {item['snippet']['title']}", debug)
-                elif not is_target:
-                    log(f"Skipping unrelated channel: {channel_title} - {item['snippet']['title']}", debug)
         except Exception as e:
-            print(f"Error during search for '{query}': {e}")
-            continue
+            print(f"Error searching for {query}: {e}")
 
-    log("Ensuring .tmp directory exists...", debug)
+    # Fetch detailed info for all found videos
+    videos = []
+    if found_video_ids:
+        print(f"Fetching details for {len(found_video_ids)} videos...")
+        # Process in batches of 50 (API limit)
+        for i in range(0, len(found_video_ids), 50):
+            batch_ids = found_video_ids[i:i+50]
+            try:
+                request = service.videos().list(
+                    part="snippet,contentDetails,topicDetails",
+                    id=",".join(batch_ids)
+                )
+                response = request.execute()
+                for item in response.get('items', []):
+                    snippet = item.get('snippet', {})
+                    videos.append({
+                        'id': item['id'],
+                        'title': snippet.get('title'),
+                        'description': snippet.get('description'),
+                        'tags': snippet.get('tags', []),
+                        'publishedAt': snippet.get('publishedAt'),
+                        'channelTitle': snippet.get('channelTitle'),
+                        'category': snippet.get('categoryId')
+                    })
+            except Exception as e:
+                print(f"Error fetching details: {e}")
+
     os.makedirs('.tmp', exist_ok=True)
-    
-    log(f"Writing {len(videos)} total videos to .tmp/videos.json...", debug)
     with open('.tmp/videos.json', 'w', encoding='utf-8') as f:
         json.dump(videos, f, ensure_ascii=False, indent=2)
 
-    print(f"Saved total {len(videos)} videos to .tmp/videos.json")
-    log("Script finished successfully.", debug)
+    print(f"Saved total {len(videos)} videos with full details to .tmp/videos.json")
 
 if __name__ == "__main__":
     main()
