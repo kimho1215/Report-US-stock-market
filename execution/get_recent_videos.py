@@ -48,8 +48,8 @@ def main():
     service = get_service(debug)
 
     now = datetime.datetime.now(datetime.timezone.utc)
-    published_after = (now - datetime.timedelta(hours=36)).isoformat().replace("+00:00", "Z")
-    published_before = (now - datetime.timedelta(hours=12)).isoformat().replace("+00:00", "Z")
+    published_after = (now - datetime.timedelta(hours=48)).isoformat().replace("+00:00", "Z")
+    published_before = (now - datetime.timedelta(hours=6)).isoformat().replace("+00:00", "Z")
 
     search_queries = ["삼프로TV", "언더스탠딩", "와이스트릿"]
     

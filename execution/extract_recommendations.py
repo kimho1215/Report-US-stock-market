@@ -25,13 +25,15 @@ def get_transcript(video_id, debug=False):
     try:
         log(f"Fetching transcript for video ID: {video_id}", debug)
         try:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            # New instance-based API for version 1.2.x
+            api = YouTubeTranscriptApi()
+            transcript_list = api.list(video_id)
             try:
                 t = transcript_list.find_transcript(['ko', 'en'])
             except:
                 t = next(iter(transcript_list))
             data = t.fetch()
-            text = " ".join([i['text'] for i in data])
+            text = " ".join([i.text for i in data])
             log(f"Transcript fetched successfully ({len(text)} chars)", debug)
             return text
         except Exception as e:
@@ -51,15 +53,15 @@ def analyze_transcript(text, video_title, debug=False):
     Each object in the list must have:
     - "stock_name": Name of the stock
     - "market": "US" or "KR"
-    - "speaker": Who is recommending (if identifiable, else "Analyst")
+    - "speaker": Who is recommending. IMPORTANT: If the person is Korean, use their Korean name in Hangeul (e.g., "김장열" instead of "Kim Jang-yeol"). If not identifiable, use "Analyst".
     - "action": "Buy" or "Sell" or "Hold"
-    - "reasoning": Why they recommend it (brief summary)
+    - "reasoning": Why they recommend it (brief summary, keep it concise)
     - "time_context": approximate time in video or "General"
     
     If there are no clear recommendations, return {{"recommendations": []}}.
     
     Content:
-    {text[:40000]} 
+    {text[:300000]} 
     """ 
 
     max_retries = 3
@@ -107,6 +109,9 @@ def main():
 
     all_recommendations = []
     log(f"Found {len(videos)} videos to process.", debug)
+    
+    # Wait a bit before starting to avoid rate limit bursts
+    time.sleep(5)
 
     # Process only top 20 videos to be safe with quota
     for video in videos[:20]:

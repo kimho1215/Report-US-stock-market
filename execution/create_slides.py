@@ -136,23 +136,46 @@ def main():
         })
         new_slide_ids.append(no_data_id)
     else:
-        for i, rec in enumerate(reversed(recommendations)):
-            slide_id = f'rec_{i}_{now.strftime("%H%M%S")}'
-            requests.append({
-                'createSlide': {
-                    'objectId': slide_id,
-                    'insertionIndex': 1,
-                    'slideLayoutReference': {'predefinedLayout': 'TITLE_AND_BODY'}
+        # Group recommendations by video_id
+        grouped_recs = {}
+        for rec in recommendations:
+            v_id = rec.get('video_id', 'unknown')
+            if v_id not in grouped_recs:
+                grouped_recs[v_id] = {
+                    'video_title': rec.get('video_title', 'Unknown Video'),
+                    'items': []
                 }
-            })
-            requests.append({
-                'updatePageProperties': {
-                    'objectId': slide_id,
-                    'pageProperties': {'pageBackgroundFill': solid_fill(RGB_BG)},
-                    'fields': 'pageBackgroundFill'
-                }
-            })
-            new_slide_ids.append(slide_id)
+            grouped_recs[v_id]['items'].append(rec)
+
+        # Create slides per video, splitting into multiple pages if many items
+        ITEMS_PER_PAGE = 5
+        for i, (v_id, data) in enumerate(reversed(list(grouped_recs.items()))):
+            items = data['items']
+            # Split items into chunks
+            chunks = [items[j:j + ITEMS_PER_PAGE] for j in range(0, len(items), ITEMS_PER_PAGE)]
+            
+            # Reverse the chunks so that when we insert at index 1, the first chunk ends up at the top
+            for chunk_idx, chunk in reversed(list(enumerate(chunks))):
+                suffix = f" ({chunk_idx + 1}/{len(chunks)})" if len(chunks) > 1 else ""
+                slide_id = f'v_rec_{i}_{chunk_idx}_{now.strftime("%H%M%S")}'
+                requests.append({
+                    'createSlide': {
+                        'objectId': slide_id,
+                        'insertionIndex': 1,
+                        'slideLayoutReference': {'predefinedLayout': 'TITLE_AND_BODY'}
+                    }
+                })
+                requests.append({
+                    'updatePageProperties': {
+                        'objectId': slide_id,
+                        'pageProperties': {'pageBackgroundFill': solid_fill(RGB_BG)},
+                        'fields': 'pageBackgroundFill'
+                    }
+                })
+                new_slide_ids.append((slide_id, {
+                    'video_title': data['video_title'] + suffix,
+                    'items': chunk
+                }))
 
     # Execute Slide Creation
     log("Creating new slides with premium theme...", debug)
@@ -179,7 +202,8 @@ def main():
         text_requests.append({'insertText': {'objectId': t_id, 'text': summary_title}})
         text_requests.append({'updateTextStyle': {'objectId': t_id, 'style': text_style(RGB_ACCENT, True, 36), 'fields': 'foregroundColor,bold,fontSize'}})
     if b_id: 
-        status_text = f"Channels: {', '.join(channels)}\nStatus: {'Success - Recommendations found' if recommendations else 'No data found'}"
+        # Add extra newlines at the start to push content down and avoid overlap with title
+        status_text = f"\n\nChannels: {', '.join(channels)}\nStatus: {'Success - Recommendations found' if recommendations else 'No data found'}"
         text_requests.append({'insertText': {'objectId': b_id, 'text': status_text}})
         text_requests.append({'updateTextStyle': {'objectId': b_id, 'style': text_style(RGB_TEXT, False, 18), 'fields': 'foregroundColor,fontSize'}})
 
@@ -194,21 +218,34 @@ def main():
             text_requests.append({'insertText': {'objectId': b_id, 'text': "조건에 맞는 추천 종목이 없습니다."}})
             text_requests.append({'updateTextStyle': {'objectId': b_id, 'style': text_style(RGB_TEXT), 'fields': 'foregroundColor'}})
     else:
-        # Match added slides (they are at the front)
-        added_slides = [s for s in slides if s['objectId'] in new_slide_ids]
-        for i, rec in enumerate(recommendations):
-            target_slide = next(s for s in added_slides if s['objectId'] == f'rec_{i}_{now.strftime("%H%M%S")}')
+        # Action Icons
+        icons = {"Buy": "🚀", "Sell": "📉", "Hold": "⚖️", "Wait": "⏳", "Watch": "👀"}
+
+        for slide_id, data in new_slide_ids:
+            target_slide = next(s for s in slides if s['objectId'] == slide_id)
             t_id, b_id = get_placeholders(target_slide)
+            
             if t_id:
-                text_requests.append({'insertText': {'objectId': t_id, 'text': f"{rec['stock_name']} ({rec['market']})"}})
-                text_requests.append({'updateTextStyle': {'objectId': t_id, 'style': text_style(RGB_ACCENT, True, 32), 'fields': 'foregroundColor,bold,fontSize'}})
+                clean_title = data['video_title']
+                if len(clean_title) > 70: clean_title = clean_title[:67] + "..."
+                text_requests.append({'insertText': {'objectId': t_id, 'text': clean_title}})
+                text_requests.append({'updateTextStyle': {'objectId': t_id, 'style': text_style(RGB_ACCENT, True, 16), 'fields': 'foregroundColor,bold,fontSize'}})
+            
             if b_id:
-                content = f"■ Action: {rec.get('action', 'N/A')}\n" \
-                          f"■ Who: {rec.get('speaker', 'N/A')}\n" \
-                          f"■ Reason: {rec.get('reasoning', '')}\n\n" \
-                          f"Source: {rec.get('video_title', '')}"
-                text_requests.append({'insertText': {'objectId': b_id, 'text': content}})
-                text_requests.append({'updateTextStyle': {'objectId': b_id, 'style': text_style(RGB_TEXT, False, 16), 'fields': 'foregroundColor,fontSize'}})
+                body_content = ""
+                for item in data['items']:
+                    action = item.get('action', 'N/A')
+                    icon = icons.get(action, "📌")
+                    market = f"[{item.get('market', '')}]" if item.get('market') else ""
+                    stock = item.get('stock_name', 'N/A')
+                    body_content += f"{icon} {stock} {market} ({action})\n"
+                    
+                    reason = item.get('reasoning', '')
+                    if len(reason) > 110: reason = reason[:107] + "..."
+                    body_content += f"      └ {reason} [{item.get('speaker', 'Analyst')}]\n"
+                
+                text_requests.append({'insertText': {'objectId': b_id, 'text': body_content}})
+                text_requests.append({'updateTextStyle': {'objectId': b_id, 'style': text_style(RGB_TEXT, False, 10), 'fields': 'foregroundColor,fontSize'}})
 
     if text_requests:
         service.presentations().batchUpdate(presentationId=presentation_id, body={'requests': text_requests}).execute()
