@@ -18,8 +18,8 @@ def log(msg, debug=False):
     if debug:
         print(f"[DEBUG] {msg}")
 
-def get_service(debug=False):
-    log("Initializing Slides Service...", debug)
+def get_services(debug=False):
+    log("Initializing Google API Services...", debug)
     creds = None
     if os.path.exists('token_slides.json'):
         log("Found token_slides.json, loading credentials...", debug)
@@ -36,7 +36,10 @@ def get_service(debug=False):
             creds = flow.run_local_server(port=0)
         with open('token_slides.json', 'w') as token:
             token.write(creds.to_json())
-    return build('slides', 'v1', credentials=creds)
+    
+    slides_service = build('slides', 'v1', credentials=creds)
+    drive_service = build('drive', 'v3', credentials=creds)
+    return slides_service, drive_service
 
 def main():
     parser = argparse.ArgumentParser(description='Create Google Slides.')
@@ -52,24 +55,39 @@ def main():
         with open('.tmp/analysis_results.json', 'r', encoding='utf-8') as f:
             recommendations = json.load(f)
 
-    # 2. Setup Slides Service
-    service = get_service(debug)
+    # 2. Setup Google Services
+    service, drive_service = get_services(debug)
 
     # 3. Handle Presentation ID (Existing or New)
     presentation_id = None
+    presentation_title = "3pro TV Stock Analysis Report"
+
+    # Try 1: Check local persistence (works for local machine)
     if os.path.exists('.tmp/slide_link.json'):
         try:
             with open('.tmp/slide_link.json', 'r', encoding='utf-8') as f:
                 presentation_id = json.load(f).get('id')
             # Verify it exists on Drive
             service.presentations().get(presentationId=presentation_id).execute()
-            log(f"Using existing presentation: {presentation_id}", debug)
+            log(f"Using existing presentation from local file: {presentation_id}", debug)
         except:
             presentation_id = None
 
+    # Try 2: Search by title on Google Drive (essential for GitHub Actions)
     if not presentation_id:
-        title = "3pro TV Stock Analysis Report"
-        presentation = service.presentations().create(body={'title': title}).execute()
+        try:
+            log(f"Searching for presentation named '{presentation_title}' on Google Drive...", debug)
+            query = f"name = '{presentation_title}' and mimeType = 'application/vnd.google-apps.presentation' and trashed = false"
+            results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+            files = results.get('files', [])
+            if files:
+                presentation_id = files[0].get('id')
+                log(f"Found existing presentation on Drive: {presentation_id} ({files[0].get('name')})", debug)
+        except Exception as e:
+            log(f"Error searching for presentation: {e}", debug)
+
+    if not presentation_id:
+        presentation = service.presentations().create(body={'title': presentation_title}).execute()
         presentation_id = presentation.get('presentationId')
         log(f"Created new presentation: {presentation_id}", debug)
 
